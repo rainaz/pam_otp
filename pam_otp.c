@@ -1,6 +1,9 @@
 #define PAM_SM_AUTH
 #define _GNU_SOURCE
 
+#include<stdio.h>
+#include<stdlib.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,13 +15,23 @@
 #include <security/pam_appl.h>
 #include <security/pam_modules.h>
 
+#include<sys/socket.h>
+#include<arpa/inet.h> 
+
 #define CONFIG_MAX_CHAR 255
 #define PROMPT_MAX_CHAR 127
 #define ACTION_MAX_CHAR 255
 
-#define LINUX_RANDOM 3
-#define SERVER 4
+#define REMOTE_ERR_MESG 99
+#define REMOTE_SUC_MESG 0
 
+#define LINUX_RANDOM 3
+#define RNG_SERVER 4
+
+#define CONFIG_FILE_ERR 12
+#define CONFIG_FILE_GOOD 11
+
+int get_random(int byte_num, int method, char *random, const char *server_ip, const int port);
 static char *action_configuration(const char *filename, const char *uname){
 
 	char *config_line = malloc(CONFIG_MAX_CHAR);
@@ -31,19 +44,49 @@ static char *action_configuration(const char *filename, const char *uname){
 		seperator++;	
 		if(strcmp(config_line, uname) == 0)
 			return seperator;
-
 	}
-
 	return NULL;	
-
 }
 
+struct rng_server_conf{
+	char *server_ip;
+	int port;
+	int method;
+};
+int server_configuration(const char *config_line, struct rng_server_conf *conf){
+	char *colon, *dollar;
+	int conf_size = sizeof(conf);
+	char *conf_copy = (char *)malloc(conf_size);
+	memcpy(conf_copy, conf, conf_size);
+	// colon = strstr(conf_copy, ":");
+	if((colon = strstr(conf_copy, ":")) == NULL)
+		return CONFIG_FILE_ERR;
+	// dollar = strstr(conf_copy, "$");
+	if((dollar = strstr(conf_copy, "$")) == NULL)
+		 return CONFIG_FILE_ERR;
+	*colon = '\0';
+	colon++;
+
+	*dollar = '\0';
+	dollar++;
+
+	struct rng_server_conf tmp =
+   		{.server_ip = conf_copy
+		,.port = atoi(colon)
+		,.method = atoi(dollar)};
+	conf = &tmp;
+	return CONFIG_FILE_GOOD;
+	
+}
 
 static char *passwd_gen(char *valid_char,int passwd_len, int method){
 	int seed, i;
 	char *passwd = (char *)malloc(sizeof(char) * (passwd_len + 1));
 	FILE *fp;
 	switch(method){
+		case(RNG_SERVER) :
+			return "fdsa";
+
 		default :
 			fp = fopen("/dev/random", "r");
 			if(fp ==NULL){
@@ -121,5 +164,53 @@ int main(int argc, char **argv){
 	struct crypt_data tmp;
 	tmp.initialized = 0;
 	fprintf(fp, "%s\n", crypt_r(passwd_gen("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 6, LINUX_RANDOM), "$6$52$", &tmp));
+	return 0;
+}
+ 
+int get_random(int byte_num, int method, char *random, const char *server_ip, const int port) {
+	int socket_desc;
+	struct sockaddr_in server;
+	char message[100];
+	char *server_reply = (char *)malloc(byte_num + 100);
+
+	socket_desc = socket(AF_INET , SOCK_STREAM , 0);
+	if (socket_desc == -1) {
+		syslog(LOG_ALERT, "pam_otp[%d] Could not create socket to %s:%d", getpid(), server_ip, port);
+		return REMOTE_ERR_MESG;
+	}
+	server.sin_addr.s_addr = inet_addr(server_ip);
+	server.sin_family = AF_INET;
+	server.sin_port = htons(port);
+
+	//Connect to remote server
+	if (connect(socket_desc , (struct sockaddr *)&server , sizeof(server)) < 0) {
+		syslog(LOG_ALERT, "pam_otp[%d] error connected to %s:%d", getpid(), server_ip, port);
+		return REMOTE_ERR_MESG;
+	}
+
+	puts("Connected\n");
+	     
+	//Send some data
+	snprintf(message, sizeof(message), "%d:%d", byte_num, method);
+	// message = "GET / HTTP/1.1\r\n\r\n";
+	if( send(socket_desc , message , strlen(message) , 0) < 0) {
+		syslog(LOG_ALERT, "pam_otp[%d] error sending message to %s:%d", getpid(), server_ip, port);
+		return REMOTE_ERR_MESG;
+	}
+	syslog(LOG_ALERT, "pam_otp[%d] successfully sending message to %s:%d", getpid(), server_ip, port);
+	//Receive a reply from the server
+	
+	if(recv(socket_desc, server_reply , 2000 , 0) < 0) {
+		syslog(LOG_ALERT, "pam_otp[%d] receive failed from %s:%d", getpid(), server_ip, port);
+		return REMOTE_ERR_MESG;
+	}
+	random = server_reply;
+	syslog(LOG_ALERT, "pam_otp[%d] received password \"%s\" from %s:%d", getpid(), random, server_ip, port);
+	// while(read(socket_desc, server_reply, 64) > 0){
+		// printf("%s", server_reply);
+	// }
+	close(socket_desc);
+
+
 	return 0;
 }
