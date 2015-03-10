@@ -32,20 +32,60 @@
 #define CONFIG_FILE_GOOD 11
 
 int get_random(int byte_num, int method, char *random, const char *server_ip, const int port);
-static char *action_configuration(const char *filename, const char *uname){
+
+static char *action_configuration_v1(FILE *config_file, const char *uname){
 
 	char *config_line = malloc(CONFIG_MAX_CHAR);
 	char action_line[ACTION_MAX_CHAR];
 	char *seperator;
-	FILE *config_file = fopen(filename, "r");
+	int len;
+	if(config_file == NULL) 
+		return NULL;
+
 	while(fgets(config_line, CONFIG_MAX_CHAR, config_file)){
+		len = strlen(config_line);
 		seperator = strstr(config_line, ":");
-		*seperator = '\0';
 		seperator++;	
-		if(strcmp(config_line, uname) == 0)
+		// printf("--------%d : %s -> %d\n", len, config_line, strlen(uname));
+		if(strncmp(config_line, uname, seperator - 1 - config_line) == 0){
+			fseek(config_file, -len, SEEK_CUR);
 			return seperator;
+		}
 	}
 	return NULL;	
+}
+
+void delete_line(FILE *file, const char *filename){
+	int delete_pos = ftell(file);
+	int line_len = 1;
+	char tmp = fgetc(file);
+	while(tmp != '\n' && tmp != EOF){
+		line_len++;
+		tmp = fgetc(file);
+	}
+	if(tmp == EOF){
+		printf("END\n");
+		line_len--;
+	}
+	fseek(file, 0, SEEK_END);
+	int end_file = ftell(file);
+	printf("%d %d %d", delete_pos, line_len, end_file);
+	char *buff = (char *)malloc(end_file + 1);
+	int pos = 0;
+	rewind(file);
+	while((buff[pos++] = fgetc(file)) != EOF)
+	memmove(buff + delete_pos, buff + delete_pos + line_len, end_file - delete_pos - line_len);
+	freopen(filename, "w", file);
+	fwrite(buff, end_file - line_len, 1, file);
+	fclose(file);
+	free(buff);
+}
+static char *check_password_avail(const char *filename, const char *uname){
+	/*
+	 * uname $method$salt$hased num
+	 */
+	FILE *passwd_file = fopen(filename, "r");
+
 }
 
 struct rng_server_conf{
@@ -54,10 +94,11 @@ struct rng_server_conf{
 	int method;
 };
 int server_configuration(const char *config_line, struct rng_server_conf *conf){
+	// 127.0.0.1:8080$1
 	char *colon, *dollar;
-	int conf_size = sizeof(conf);
+	int conf_size = strlen(config_line) + 2;
 	char *conf_copy = (char *)malloc(conf_size);
-	memcpy(conf_copy, conf, conf_size);
+	memcpy(conf_copy, config_line, conf_size);
 	// colon = strstr(conf_copy, ":");
 	if((colon = strstr(conf_copy, ":")) == NULL)
 		return CONFIG_FILE_ERR;
@@ -69,12 +110,9 @@ int server_configuration(const char *config_line, struct rng_server_conf *conf){
 
 	*dollar = '\0';
 	dollar++;
-
-	struct rng_server_conf tmp =
-   		{.server_ip = conf_copy
-		,.port = atoi(colon)
-		,.method = atoi(dollar)};
-	conf = &tmp;
+	conf->server_ip = conf_copy;
+	conf->port = atoi(colon);
+	conf->method = atoi(dollar);
 	return CONFIG_FILE_GOOD;
 	
 }
@@ -134,6 +172,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 	snprintf(tmp, PROMPT_MAX_CHAR, "%s [%s]: ", prompt, (char *)pam_uname);
 
 	message->msg = tmp;
+
 	// get the conversation item from pam to set the message
 	if(pam_get_item(pamh, PAM_CONV, (const void **)&conv) != PAM_SUCCESS){
 		syslog(LOG_ALERT, "pam_otp[%d] can not get the conversation", getpid());
@@ -149,7 +188,11 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 	
 	// syslog(LOG_ALERT, "pam_otp[%d] %s", getpid(), argv[0]);
 	if(strcmp(argv[0], response->resp) == 0){
-		syslog(LOG_ALERT, "pam_otp[%d] Authenticate complete by user %s", getpid(), (char *)pam_uname);
+		char a[100];
+		struct rng_server_conf tmp;
+		server_configuration("127.0.0.1:808$485\0", &tmp);
+		snprintf(a, 100, "%s %d %d", tmp.server_ip, tmp.port, tmp.method);
+		syslog(LOG_ALERT, "pam_otp[%d] Authenticate complete by user %s %s", getpid(), (char *)pam_uname, a);
 		return PAM_SUCCESS;
 	}
 	else{
@@ -157,60 +200,40 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 		return PAM_AUTH_ERR;
 	}
 }
-
-int main(int argc, char **argv){
-	FILE *fp = fopen("tmp", "w");
-
-	struct crypt_data tmp;
-	tmp.initialized = 0;
-	fprintf(fp, "%s\n", crypt_r(passwd_gen("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 6, LINUX_RANDOM), "$6$52$", &tmp));
-	return 0;
-}
  
 int get_random(int byte_num, int method, char *random, const char *server_ip, const int port) {
 	int socket_desc;
 	struct sockaddr_in server;
 	char message[100];
 	char *server_reply = (char *)malloc(byte_num + 100);
-
 	socket_desc = socket(AF_INET , SOCK_STREAM , 0);
 	if (socket_desc == -1) {
 		syslog(LOG_ALERT, "pam_otp[%d] Could not create socket to %s:%d", getpid(), server_ip, port);
 		return REMOTE_ERR_MESG;
 	}
+
 	server.sin_addr.s_addr = inet_addr(server_ip);
 	server.sin_family = AF_INET;
 	server.sin_port = htons(port);
 
-	//Connect to remote server
 	if (connect(socket_desc , (struct sockaddr *)&server , sizeof(server)) < 0) {
 		syslog(LOG_ALERT, "pam_otp[%d] error connected to %s:%d", getpid(), server_ip, port);
 		return REMOTE_ERR_MESG;
 	}
-
-	puts("Connected\n");
-	     
-	//Send some data
 	snprintf(message, sizeof(message), "%d:%d", byte_num, method);
-	// message = "GET / HTTP/1.1\r\n\r\n";
-	if( send(socket_desc , message , strlen(message) , 0) < 0) {
+
+	if(send(socket_desc , message , strlen(message) , 0) < 0) {
 		syslog(LOG_ALERT, "pam_otp[%d] error sending message to %s:%d", getpid(), server_ip, port);
 		return REMOTE_ERR_MESG;
 	}
 	syslog(LOG_ALERT, "pam_otp[%d] successfully sending message to %s:%d", getpid(), server_ip, port);
-	//Receive a reply from the server
-	
-	if(recv(socket_desc, server_reply , 2000 , 0) < 0) {
+
+	if(recv(socket_desc, server_reply , byte_num + 100 , 0) < 0) {
 		syslog(LOG_ALERT, "pam_otp[%d] receive failed from %s:%d", getpid(), server_ip, port);
 		return REMOTE_ERR_MESG;
 	}
-	random = server_reply;
+	memcpy(random, server_reply, (int)strlen(server_reply) + 1);
 	syslog(LOG_ALERT, "pam_otp[%d] received password \"%s\" from %s:%d", getpid(), random, server_ip, port);
-	// while(read(socket_desc, server_reply, 64) > 0){
-		// printf("%s", server_reply);
-	// }
 	close(socket_desc);
-
-
 	return 0;
 }
