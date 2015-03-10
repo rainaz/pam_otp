@@ -21,7 +21,11 @@
 #include<sys/socket.h>
 #include<arpa/inet.h> 
 
-struct rng_server_conf;
+struct rng_server_conf{
+	char *server_ip;
+	int port;
+	int method;
+};
 int get_random(int byte_num, int method, char *random, const char *server_ip, const int port);
 char *action_configuration_v1(FILE *config_file, const char *uname);
 void delete_line(FILE *file, const char *filename);
