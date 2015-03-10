@@ -1,6 +1,6 @@
 #include<stdio.h>
 #include<sys/socket.h>
-#include<arpa/inet.h> //inet_addr
+#include<arpa/inet.h>
  
 int main(int argc , char *argv[])
 {
@@ -24,19 +24,19 @@ int main(int argc , char *argv[])
     //Bind
     if( bind(socket_desc,(struct sockaddr *)&server , sizeof(server)) < 0)
     {
-        puts("bind failed");
+        printf("bind failed");
     }
-    puts("bind done");
+    printf("bind done");
      
     //Listen
-    listen(socket_desc , 3);
+    listen(socket_desc , 9);
      
     //Accept and incoming connection
-    puts("Waiting for incoming connections...");
+    printf("Waiting for incoming connections...");
     c = sizeof(struct sockaddr_in);
 
 	while((new_socket = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c))){
-		puts("Connection accepted");
+		printf("Connection accepted");
 		recv(new_socket, header, 100, 0);
 										 
 		// Reply to the client
